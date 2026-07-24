@@ -66,7 +66,7 @@ from pose_utils import create_pose_detector
 from voice_utils import VoiceEngine
 from display_utils import FeedbackDisplay, draw_workout_summary, draw_hud
 from session_utils import SessionTracker
-from landmark_exporter import LandmarkExporter, labels_to_issue_codes
+from landmark_exporter import LandmarkExporter
 from feature_utils import extract_features
 from rep_window import RepWindowTracker
 from websocket_server import WebSocketBroadcaster
@@ -210,6 +210,7 @@ def main():
         displayed_feedback = "None"
         exercise_state = "INVALID"
         posture_labels = []
+        issue_codes = []
         body_angle_smoothed = 0
         rep_count = 0
         left_angle = 0
@@ -254,6 +255,7 @@ def main():
 
                     exercise_state = result.state
                     posture_labels = result.form_labels
+                    issue_codes = result.form_issue_codes
                     body_angle_smoothed = result.back_angle
                     rep_count = result.rep_count
                     left_angle = result.left_angle
@@ -305,7 +307,7 @@ def main():
                 landmarks, frame_timestamp,
                 state=exercise_state,
                 rep_id=rep_id_for_frame,
-                active_issues=labels_to_issue_codes(posture_labels),
+                active_issues=issue_codes,
                 is_walking=is_walking,
                 features=features,
                 feature_quality=feature_quality,

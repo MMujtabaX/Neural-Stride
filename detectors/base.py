@@ -14,7 +14,13 @@ EXERCISE RESULT FIELDS:
     Every frame, exercise.update() returns an ExerciseResult with:
         state:           Current state string ("UP", "DOWN", "MID", "HOLDING", etc.)
         feedback:        Form feedback text to display (e.g., "Fix your back lean")
-        form_labels:     List of active issue codes (e.g., ["BACK_LEAN", "HIP_DROP"])
+        form_labels:     List of human-readable DISPLAY strings for the HUD
+                         (e.g., ["Back leaning", "Hips uneven"]) — for showing
+                         the user what is wrong, never for data capture.
+        form_issue_codes: List of raw issue codes, parallel to form_labels
+                         (e.g., ["BACK_LEAN", "HIP_DROP"]) — for data capture
+                         and ML training labels. Same underlying issue list as
+                         form_labels, just not converted to display text.
         is_walking:      True if WalkingDetector detected walking in frame
         voice_message:   Text to speak via VoiceEngine (None = nothing to say)
         rep_count:       Total completed reps so far
@@ -62,7 +68,8 @@ class ExerciseResult:
     """
     state: str = "INVALID"              # Current exercise state ("UP", "DOWN", "MID", "HOLDING", etc.)
     feedback: str = "None"               # Form feedback text for on-screen display
-    form_labels: list = field(default_factory=list)  # Active form issue codes (e.g., ["BACK_LEAN"])
+    form_labels: list = field(default_factory=list)  # Display strings for HUD (e.g., ["Back leaning"])
+    form_issue_codes: list = field(default_factory=list)  # Raw issue codes (e.g. ["BACK_LEAN"]) — parallel to form_labels
     is_walking: bool = False              # True if walking detected in this frame
     voice_message: str = None             # Text to speak (None = no speech this frame)
     rep_count: int = 0                    # Total completed reps so far

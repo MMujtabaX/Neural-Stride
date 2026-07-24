@@ -73,6 +73,15 @@ ISSUE_NAMES = {
     "ELBOW_FLARE": "Elbow flare"
 }
 
+# Every issue code any detector may emit. ISSUE_NAMES covers the ones that appear in
+# rep summaries; this set is the full vocabulary including frame-level-only codes.
+# Used by landmark_exporter.py to fail loudly on an unrecognised code rather than
+# silently dropping or mislabelling training data.
+VALID_ISSUE_CODES = frozenset({
+    *ISSUE_NAMES.keys(),
+    "ASYMMETRIC",   # squat/push-up: limbs bending unevenly — frame-level guard, never logged to a rep
+})
+
 
 class SessionTracker:
     """

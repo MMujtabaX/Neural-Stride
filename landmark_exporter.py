@@ -1,21 +1,31 @@
 """
 ================================================================================
-NeuralStride AI - Landmark Coordinate Exporter (Schema v2 - Training Export)
+NeuralStride AI - Landmark Coordinate Exporter (Schema v3 - Training Export)
 ================================================================================
 
 Exports MediaPipe Pose landmark data to a JSONL file in near real-time. Each
 line in the file is a complete JSON object — one line per frame — containing
 all 33 body landmarks with their x, y, z coordinates and visibility.
 
-Schema v2 adds machine-learning-ready labelled data alongside the original
-visualisation payload: every frame is tagged with the exercise state, the id
-of the rep in progress, active rule-engine issue codes and a per-frame
-biomechanical feature vector; every rep is additionally emitted as its own
-"rep" line once its final label is known.
+Schema v2 added machine-learning-ready labelled data alongside the original
+visualisation payload: every frame tagged with the exercise state, the id of
+the rep in progress, active rule-engine issue codes and a per-frame
+biomechanical feature vector; every rep additionally emitted as its own "rep"
+line once its final label is known.
+
+Schema v3 changes only where "active_issues" comes from. v2 reconstructed it
+by reverse-mapping ExerciseResult.form_labels display strings back to codes —
+a workaround that silently produced [] if a display string ever changed or
+collided. v3 reads ExerciseResult.form_issue_codes directly (a field the
+detectors now populate as raw codes, parallel to form_labels) and validates
+every code against session_utils.VALID_ISSUE_CODES, raising immediately on
+anything unrecognised instead of dropping it silently. Files written before
+this change are schema_version 2 and their active_issues should be treated as
+lower-confidence (see inspect_jsonl.py's v2/v3 handling).
 
 PURPOSE:
     v1: captured raw pose landmark data for a Three.js 3D skeleton viewer.
-    v2: the above, PLUS everything a CNN-LSTM training pipeline needs to
+    v2/v3: the above, PLUS everything a CNN-LSTM training pipeline needs to
     join frames to reps and reps to labels, without changing anything the
     v1 consumer (the Three.js client / WebSocket viewer) already relies on.
     Raw landmarks are never removed — new fields are only ever added.
@@ -42,8 +52,8 @@ WHY JSONL (not CSV):
 METADATA LINE FORMAT (line 1):
     {
         "type": "metadata",
-        "format": "NeuralStride Landmark Export v2",
-        "schema_version": 2,
+        "format": "NeuralStride Landmark Export v3",
+        "schema_version": 3,
         "landmark_count": 33,
         "landmark_names": { "0": "nose", ... },
         "connections": [ [0,1], ... ],
@@ -79,11 +89,10 @@ FRAME LINE FORMAT:
     - "rep_id" is the id of the rep currently in progress, or null between reps.
     - "active_issues" holds raw issue codes (BACK_LEAN, KNEE_FORWARD, ...),
       never the human-readable display strings — the model trains on codes.
-      Detectors only expose display strings per-frame via ExerciseResult
-      .form_labels (see detectors/*.py "*_issues_to_display" functions); the
-      hard constraint against touching detector logic means this file
-      reconstructs the raw codes via _DISPLAY_LABEL_TO_CODE below rather than
-      adding a new field to ExerciseResult.
+      Sourced directly from ExerciseResult.form_issue_codes (a field parallel
+      to form_labels, populated by the detectors themselves). Every code is
+      validated against session_utils.VALID_ISSUE_CODES in log_frame() —
+      an unrecognised code raises immediately rather than being dropped.
 
 REP LINE FORMAT (written after the frames it describes; NEVER broadcast):
     {
@@ -164,6 +173,7 @@ import time
 from datetime import datetime
 
 from feature_utils import FEATURE_NAMES, FEATURE_COUNT
+from session_utils import VALID_ISSUE_CODES
 
 
 # ---------------------------------------------------------------------------
@@ -243,40 +253,6 @@ POSE_CONNECTIONS = [
     # Right hand: wrist -> pinky, index, thumb
     [16, 18], [16, 20], [16, 22]
 ]
-
-# ---------------------------------------------------------------------------
-# RAW ISSUE CODE RECOVERY
-# ---------------------------------------------------------------------------
-# Detectors only expose HUMAN-READABLE display strings per-frame, via
-# ExerciseResult.form_labels (populated by each detector's own
-# "*_issues_to_display()" helper — see detectors/squat.py, pushup.py,
-# plank.py, lunge.py). The raw codes powering those strings only ever reach
-# a completed ExerciseResult.rep_issues at rep-completion time.
-#
-# The hard constraint against modifying detector logic means we cannot add a
-# "raw codes" field to ExerciseResult. Instead, since every display string in
-# the app is unique and stable, this table reverses display string -> code so
-# "active_issues" can carry codes on every frame, not just at rep completion.
-# Anything not found here (e.g. "ASYMMETRIC", which detectors already put
-# directly into form_labels as a raw code) passes through unchanged.
-_DISPLAY_LABEL_TO_CODE = {
-    "Back lean (severe)": "SEVERE_LEAN",
-    "Back leaning": "BACK_LEAN",
-    "Knees past toes": "KNEE_FORWARD",
-    "Knee past ankle": "KNEE_FORWARD",
-    "Hips uneven": "HIP_DROP",
-    "Too shallow": "SHALLOW",
-    "Hips sagging": "HIP_SAG",
-    "Hips too high": "PIKE",
-    "Hands too narrow": "HANDS_NARROW",
-    "Hands too wide": "HANDS_WIDE",
-    "Elbows flaring": "ELBOW_FLARE",
-}
-
-
-def labels_to_issue_codes(labels):
-    """Map a list of ExerciseResult.form_labels display strings to raw issue codes."""
-    return [_DISPLAY_LABEL_TO_CODE.get(label, label) for label in labels]
 
 
 def _sanitize_for_filename(value):
@@ -362,8 +338,8 @@ class LandmarkExporter:
         # --- Write metadata header as line 1 ---
         header = {
             "type": "metadata",
-            "format": "NeuralStride Landmark Export v2",
-            "schema_version": 2,
+            "format": "NeuralStride Landmark Export v3",
+            "schema_version": 3,
             "landmark_count": 33,
             "landmark_names": LANDMARK_NAMES,
             "connections": POSE_CONNECTIONS,
@@ -413,17 +389,35 @@ class LandmarkExporter:
             timestamp:      Relative time in seconds from workout start.
             state:          Current exercise state string, or None/"INVALID".
             rep_id:         Id of the rep currently in progress, or None.
-            active_issues:  List of raw issue codes active this frame.
+            active_issues:  List of raw issue codes active this frame, straight
+                             from ExerciseResult.form_issue_codes. Every code
+                             is validated against VALID_ISSUE_CODES — an
+                             unrecognised code raises ValueError immediately
+                             (label corruption must fail fast, not train a
+                             model on silently-dropped or garbled labels).
             is_walking:     True if WalkingDetector flagged this frame.
             features:       22-value feature vector from extract_features(),
                              or None if it could not be computed this frame.
             feature_quality: Quality score from extract_features(), or None.
+
+        Raises:
+            ValueError: if active_issues contains a code not in
+                        session_utils.VALID_ISSUE_CODES.
         """
         if self.file is None:
             return
 
         if timestamp is None:
             timestamp = time.time() - self.start_time
+
+        active_issues = active_issues if active_issues else []
+        for code in active_issues:
+            if code not in VALID_ISSUE_CODES:
+                raise ValueError(
+                    f"Unknown issue code {code!r} in active_issues - a detector is "
+                    f"emitting a code missing from session_utils.VALID_ISSUE_CODES. "
+                    f"Fix the vocabulary before recording more data."
+                )
 
         self.frame_count += 1
 
@@ -434,7 +428,7 @@ class LandmarkExporter:
             "landmarks": {},
             "state": state,
             "rep_id": rep_id,
-            "active_issues": active_issues if active_issues else [],
+            "active_issues": active_issues,
             "is_walking": bool(is_walking),
             "features": [round(f, 4) for f in features] if features is not None else [],
             "feature_quality": round(feature_quality, 4) if feature_quality is not None else 0.0,

@@ -342,6 +342,7 @@ class PlankExercise(BaseExercise):
             state="HOLDING",
             feedback=feedback,
             form_labels=posture_labels,
+            form_issue_codes=posture_issues,
             voice_message=voice_msg,
             rep_count=self.rep_count,
             back_angle=self.elbow_angle,

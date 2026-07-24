@@ -3,10 +3,19 @@
 NeuralStride AI - JSONL Health Report (Training-Data Verification Tool)
 ================================================================================
 
-Standalone script that reads a schema v2 .jsonl file (from LandmarkExporter
-or video_landmark_extractor.py) and prints a health report. This is how you
-verify the Phase 1 export layer worked BEFORE trusting the file enough to
-add it to a training dataset — it trains nothing and builds no tensors.
+Standalone script that reads a schema v2 or v3 .jsonl file (from
+LandmarkExporter or video_landmark_extractor.py) and prints a health report.
+This is how you verify the Phase 1 export layer worked BEFORE trusting the
+file enough to add it to a training dataset — it trains nothing and builds
+no tensors.
+
+SCHEMA v2 vs v3:
+    v3 files source "active_issues" directly from ExerciseResult
+    .form_issue_codes (raw detector codes). v2 files reconstructed it by
+    reverse-mapping display strings, which could silently produce [] on a
+    collision or a since-changed display string. This script prints the
+    schema_version it finds and flags v2 files as lower-confidence for
+    active_issues specifically — everything else about a v2 file is fine.
 
 REPORTS:
     - Schema version and the full session block
@@ -17,7 +26,13 @@ REPORTS:
     - feature_quality distribution (min / median / max)
     - Per-feature min / mean / max, printed with feature_names
     - Rep duration distribution (frames and seconds)
-    - Issue-code frequency across reps
+    - Issue-code frequency across reps (how many REPS a fault spoiled)
+    - Issue-code frequency across frames (how OFTEN a fault is present) —
+      a different signal from the rep-level count, both matter for spotting
+      class imbalance before training
+    - Issue-code vocabulary check: every code seen (frame-level or rep-level)
+      must be in session_utils.VALID_ISSUE_CODES; anything else is reported
+      as a problem, not silently ignored
     - Continuity check: every rep's [start_frame, end_frame] must correspond
       to frames that exist in the file, and rep windows must not overlap
 
@@ -26,6 +41,7 @@ USAGE:
 
 DEPENDENCIES:
     json, math, statistics, sys — all Python standard library
+    session_utils — for VALID_ISSUE_CODES (the issue-code vocabulary)
 ================================================================================
 """
 
@@ -33,6 +49,8 @@ import json
 import math
 import statistics
 import sys
+
+from session_utils import VALID_ISSUE_CODES
 
 
 def load_lines(path):
@@ -72,7 +90,14 @@ def report_session(metadata):
         print("No metadata line found (expected the first line, type: metadata).")
         return
     print(f"format:          {metadata.get('format')}")
-    print(f"schema_version:  {metadata.get('schema_version')}")
+    schema_version = metadata.get("schema_version")
+    print(f"schema_version:  {schema_version}")
+    if schema_version == 2:
+        print(
+            "NOTE: this is a v2 file — active_issues came from reverse-mapping "
+            "display strings, not raw detector codes. Treat active_issues as "
+            "lower-confidence compared to v3+ files (see module docstring)."
+        )
     session = metadata.get("session", {})
     if session:
         for key, value in session.items():
@@ -175,6 +200,42 @@ def report_reps(reps):
         print("  None recorded.")
 
 
+def report_issue_codes(frames, reps):
+    print("\n" + "=" * 70)
+    print("ISSUE CODE FREQUENCY (frame-level) + VOCABULARY CHECK")
+    print("=" * 70)
+
+    frame_issue_counts = {}
+    for frame in frames:
+        for issue in frame.get("active_issues") or []:
+            frame_issue_counts[issue] = frame_issue_counts.get(issue, 0) + 1
+
+    print("Frames containing each issue code (how often a fault is present):")
+    if frame_issue_counts:
+        for issue, count in sorted(frame_issue_counts.items(), key=lambda kv: -kv[1]):
+            print(f"  {issue:<16} {count}")
+    else:
+        print("  None recorded.")
+
+    unknown_codes = set()
+    for frame in frames:
+        for issue in frame.get("active_issues") or []:
+            if issue not in VALID_ISSUE_CODES:
+                unknown_codes.add(issue)
+    for rep in reps:
+        for issue in rep.get("issues") or []:
+            if issue not in VALID_ISSUE_CODES:
+                unknown_codes.add(issue)
+
+    print("\nVocabulary check against session_utils.VALID_ISSUE_CODES:")
+    if unknown_codes:
+        print(f"  ERROR: {len(unknown_codes)} unrecognised code(s): {sorted(unknown_codes)}")
+    else:
+        print("  OK - every issue code seen is in the known vocabulary.")
+
+    return len(unknown_codes)
+
+
 def report_continuity(frames, reps):
     print("\n" + "=" * 70)
     print("CONTINUITY CHECK")
@@ -235,7 +296,9 @@ def main():
 
     report_feature_health(metadata, frames)
     report_reps(reps)
-    problems = report_continuity(frames, reps)
+    unknown_code_count = report_issue_codes(frames, reps)
+    continuity_problems = report_continuity(frames, reps)
+    problems = unknown_code_count + continuity_problems
 
     print("\n" + "=" * 70)
     if problems == 0:
