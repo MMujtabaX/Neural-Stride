@@ -1,0 +1,14 @@
+# NeuralStride AI — Python Dependencies
+# Install:  pip install -r requirements.txt
+#
+# Requirements:
+#   - Windows (voice uses Windows SAPI via pywin32)
+#   - Python 3.12 (mediapipe 0.10.14 is NOT compatible with Python 3.13+)
+#   - A webcam
+
+mediapipe==0.10.14
+opencv-python==4.13.0.92
+numpy==2.4.6
+protobuf==4.25.3
+pywin32==311
+websockets==16.1
