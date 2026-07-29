@@ -233,7 +233,7 @@ def extract_landmarks_from_video(video_path, mirror, subject_id, camera_view):
             landmarks = results.pose_landmarks.landmark
             timestamp = frame_index / fps
 
-            features, feature_quality = extract_features(landmarks, mp_pose)
+            features, feature_quality, feature_confidence = extract_features(landmarks, mp_pose, camera_view=camera_view)
 
             frame_data = {
                 "type": "frame",
@@ -246,6 +246,7 @@ def extract_landmarks_from_video(video_path, mirror, subject_id, camera_view):
                 "is_walking": False,
                 "features": [round(f, 4) for f in features],
                 "feature_quality": round(feature_quality, 4),
+                "feature_confidence": [round(c, 4) for c in feature_confidence],
             }
 
             for i, lm in enumerate(landmarks):

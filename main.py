@@ -147,11 +147,11 @@ def main():
 
     window_name = f"NeuralStride AI - {exercise_name}"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
     user32 = ctypes.windll.user32
     screen_width = user32.GetSystemMetrics(0)
     screen_height = user32.GetSystemMetrics(1)
-    cv2.resizeWindow(window_name, screen_width - 100, screen_height - 120)
 
     mp_drawing = mp.solutions.drawing_utils
 
@@ -238,7 +238,7 @@ def main():
 
             # Computed once per frame regardless of ready/tracking state —
             # this is the only extract_features() call per frame (30fps budget).
-            features, feature_quality = extract_features(landmarks, mp_pose)
+            features, feature_quality, feature_confidence = extract_features(landmarks, mp_pose, camera_view=camera_view)
 
             frame_number = landmark_exporter.frame_count + 1
             frame_timestamp = now - session.start_time
@@ -311,6 +311,7 @@ def main():
                 is_walking=is_walking,
                 features=features,
                 feature_quality=feature_quality,
+                feature_confidence=feature_confidence,
             )
             if json_string:
                 ws_broadcaster.update(json_string)

@@ -37,9 +37,18 @@ DEGENERATE INPUT:
     training-breaking outlier. The vector is asserted finite before return.
 
 QUALITY SCORE:
-    quality = min(visibility) over CORE_LANDMARKS (shoulders, hips, knees,
-    ankles). Returned separately from the feature vector — the training
-    pipeline uses it to drop unreliable frames, it is not itself a feature.
+    quality = min(visibility) over CORE_LANDMARKS (front view) or the
+    dynamically-selected near-side landmarks (side/diagonal view).
+    Returned separately from the feature vector — the training pipeline
+    uses it to drop unreliable frames, it is not itself a feature.
+
+FEATURE CONFIDENCE:
+    A parallel 22-element array where each entry is the minimum visibility
+    of the landmarks that feature depends on (FEATURE_LANDMARK_DEPS). In
+    side/diagonal views, far-side and cross-side features will have lower
+    confidence than near-side features — this lets the training pipeline
+    mask or down-weight untrustworthy feature slots without dropping the
+    entire frame.
 
 MIRROR AUGMENTATION (MIRROR_PAIRS, mirror_features()):
     Training data benefits from left/right mirrored duplicates. MIRROR_PAIRS
@@ -52,7 +61,7 @@ MIRROR AUGMENTATION (MIRROR_PAIRS, mirror_features()):
 
 USAGE:
     from feature_utils import extract_features
-    features, quality = extract_features(landmarks, mp_pose)
+    features, quality, confidence = extract_features(landmarks, mp_pose, camera_view="side")
 
 DEPENDENCIES:
     numpy (via angle_utils), math — no new pip installs required.
@@ -102,6 +111,51 @@ _MIRROR_NEGATE_INDICES = (14, 15)
 # shoulders, hips, knees, ankles.
 CORE_LANDMARKS = [11, 12, 23, 24, 25, 26, 27, 28]
 
+# Landmark indices split by body side for camera-aware quality.
+CORE_LANDMARKS_LEFT = [11, 23, 25, 27]
+CORE_LANDMARKS_RIGHT = [12, 24, 26, 28]
+
+SIDE_VIEWS = ("side", "diagonal")
+
+# For each of the 22 features, the landmark indices it depends on.
+# Per-feature confidence = min(visibility) of these landmarks.
+# Order must match FEATURE_NAMES exactly — asserted at module load.
+FEATURE_LANDMARK_DEPS = [
+    [23, 25, 27],
+    [24, 26, 28],
+    [11, 23, 25],
+    [12, 24, 26],
+    [11, 13, 15],
+    [12, 14, 16],
+    [13, 11, 23],
+    [14, 12, 24],
+    [25, 27, 31],
+    [26, 28, 32],
+    [11, 12, 23, 24],
+    [23, 25, 27, 24, 26, 28],
+    [11, 23, 25, 12, 24, 26],
+    [11, 13, 15, 12, 14, 16],
+    [23, 24],
+    [11, 12],
+    [25, 31],
+    [26, 32],
+    [23, 24, 27, 28],
+    [11, 12, 23, 24],
+    [27, 28],
+    [15, 16],
+]
+assert len(FEATURE_LANDMARK_DEPS) == FEATURE_COUNT
+
+
+def _best_side_landmarks(landmarks):
+    """Return the core-landmark list for whichever body side has higher
+    average visibility — needed because side/diagonal views only show
+    one side clearly, but we don't know in advance which side faces
+    the camera."""
+    left_avg = sum(landmarks[i].visibility for i in CORE_LANDMARKS_LEFT) / len(CORE_LANDMARKS_LEFT)
+    right_avg = sum(landmarks[i].visibility for i in CORE_LANDMARKS_RIGHT) / len(CORE_LANDMARKS_RIGHT)
+    return CORE_LANDMARKS_LEFT if left_avg >= right_avg else CORE_LANDMARKS_RIGHT
+
 _GEOMETRY_CLAMP_MIN = -10.0
 _GEOMETRY_CLAMP_MAX = 10.0
 _DEGENERATE_EPS = 1e-6
@@ -128,7 +182,16 @@ def _clamp(value):
     return value
 
 
-def extract_features(landmarks, mp_pose):
+def _compute_feature_confidence(landmarks):
+    """Return a 22-element list where each entry is the minimum visibility
+    of the landmarks that the corresponding feature depends on."""
+    confidence = []
+    for deps in FEATURE_LANDMARK_DEPS:
+        confidence.append(min(landmarks[i].visibility for i in deps))
+    return confidence
+
+
+def extract_features(landmarks, mp_pose, camera_view="front"):
     """
     Compute the 22-value biomechanical feature vector for one frame.
 
@@ -136,10 +199,13 @@ def extract_features(landmarks, mp_pose):
         landmarks: MediaPipe pose_landmarks.landmark list (33 NormalizedLandmark
                    objects), same object passed to every exercise detector.
         mp_pose:   mp.solutions.pose module (for PoseLandmark constants).
+        camera_view: "front", "side", or "diagonal". For side/diagonal views
+                     the quality score uses only near-side landmarks.
 
     Returns:
         Tuple of (feature_vector: list[float] of length FEATURE_COUNT,
-                  quality_score: float in 0-1).
+                  quality_score: float in 0-1,
+                  feature_confidence: list[float] of length FEATURE_COUNT).
     """
     lm = mp_pose.PoseLandmark
 
@@ -162,7 +228,8 @@ def extract_features(landmarks, mp_pose):
     if hip_width < _DEGENERATE_EPS:
         hip_width = _euclidean(left_shoulder, right_shoulder)
         if hip_width < _DEGENERATE_EPS:
-            return [0.0] * FEATURE_COUNT, 0.0
+            zero_conf = [0.0] * FEATURE_COUNT
+            return [0.0] * FEATURE_COUNT, 0.0, zero_conf
 
     # --- Joint angles (0-10) ---
     left_knee_angle = calculate_angle(left_hip, left_knee, left_ankle)
@@ -228,9 +295,15 @@ def extract_features(landmarks, mp_pose):
     assert len(features) == FEATURE_COUNT
     assert all(math.isfinite(v) for v in features)
 
-    quality = min(landmarks[i].visibility for i in CORE_LANDMARKS)
+    if camera_view in SIDE_VIEWS:
+        quality_landmarks = _best_side_landmarks(landmarks)
+    else:
+        quality_landmarks = CORE_LANDMARKS
+    quality = min(landmarks[i].visibility for i in quality_landmarks)
 
-    return features, quality
+    feature_confidence = _compute_feature_confidence(landmarks)
+
+    return features, quality, feature_confidence
 
 
 def mirror_features(vec):

@@ -54,7 +54,7 @@ import mediapipe as mp
 from angle_utils import calculate_angle
 from detectors.base import BaseExercise, ExerciseResult
 
-HIP_SAG_THRESHOLD = 0.04
+HIP_SAG_THRESHOLD = 0.035
 PIKE_THRESHOLD = 0.02
 PLANK_READY_THRESHOLD = 0.25
 PLANK_EXTENDED_THRESHOLD = 0.30

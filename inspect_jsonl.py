@@ -3,7 +3,7 @@
 NeuralStride AI - JSONL Health Report (Training-Data Verification Tool)
 ================================================================================
 
-Standalone script that reads a schema v2 or v3 .jsonl file (from
+Standalone script that reads a schema v2, v3, or v4 .jsonl file (from
 LandmarkExporter or video_landmark_extractor.py) and prints a health report.
 This is how you verify the Phase 1 export layer worked BEFORE trusting the
 file enough to add it to a training dataset — it trains nothing and builds
@@ -119,6 +119,7 @@ def report_feature_health(metadata, frames):
     nan_inf_frames = 0
     qualities = []
     per_feature_values = None
+    per_feature_conf = None
 
     for frame in frames:
         features = frame.get("features", [])
@@ -133,12 +134,18 @@ def report_feature_health(metadata, frames):
         if quality is not None:
             qualities.append(quality)
 
+        fc = frame.get('feature_confidence')
         if features and not has_bad:
             if per_feature_values is None:
                 per_feature_values = [[] for _ in features]
             if len(features) == len(per_feature_values):
                 for i, v in enumerate(features):
                     per_feature_values[i].append(v)
+            if fc and len(fc) == len(features):
+                if per_feature_conf is None:
+                    per_feature_conf = [[] for _ in fc]
+                for i, v in enumerate(fc):
+                    per_feature_conf[i].append(v)
 
     print(f"Frames with mismatched feature length: {mismatched} / {len(frames)}")
     print(f"Frames with NaN/inf in features:       {nan_inf_frames} / {len(frames)}")
@@ -161,6 +168,21 @@ def report_feature_health(metadata, frames):
             print(f"  {name:<26} min={min(values):8.3f}  mean={statistics.mean(values):8.3f}  max={max(values):8.3f}")
     else:
         print("  No feature data available.")
+
+    print("\nPer-feature confidence min / mean / max:")
+    if per_feature_conf:
+        names = feature_names or [f"feature_{i}" for i in range(len(per_feature_conf))]
+        for i, values in enumerate(per_feature_conf):
+            if not values:
+                continue
+            name = names[i] if i < len(names) else f"feature_{i}"
+            mn = min(values)
+            avg = statistics.mean(values)
+            mx = max(values)
+            flag = " LOW-CONFIDENCE (view-occluded?)" if avg < 0.5 else ""
+            print(f"  {name:<26} min={mn:8.3f}  mean={avg:8.3f}  max={mx:8.3f}{flag}")
+    else:
+        print("  No confidence data (file is v3 or earlier).")
 
 
 def report_reps(reps):

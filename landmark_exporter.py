@@ -1,6 +1,6 @@
 """
 ================================================================================
-NeuralStride AI - Landmark Coordinate Exporter (Schema v3 - Training Export)
+NeuralStride AI - Landmark Coordinate Exporter (Schema v4 - Training Export)
 ================================================================================
 
 Exports MediaPipe Pose landmark data to a JSONL file in near real-time. Each
@@ -52,8 +52,8 @@ WHY JSONL (not CSV):
 METADATA LINE FORMAT (line 1):
     {
         "type": "metadata",
-        "format": "NeuralStride Landmark Export v3",
-        "schema_version": 3,
+        "format": "NeuralStride Landmark Export v4",
+        "schema_version": 4,
         "landmark_count": 33,
         "landmark_names": { "0": "nose", ... },
         "connections": [ [0,1], ... ],
@@ -338,8 +338,8 @@ class LandmarkExporter:
         # --- Write metadata header as line 1 ---
         header = {
             "type": "metadata",
-            "format": "NeuralStride Landmark Export v3",
-            "schema_version": 3,
+            "format": "NeuralStride Landmark Export v4",
+            "schema_version": 4,
             "landmark_count": 33,
             "landmark_names": LANDMARK_NAMES,
             "connections": POSE_CONNECTIONS,
@@ -378,6 +378,7 @@ class LandmarkExporter:
         is_walking=False,
         features=None,
         feature_quality=None,
+        feature_confidence=None,
     ):
         """
         Writes one frame's landmark + label + feature data as a single JSON line.
@@ -399,6 +400,8 @@ class LandmarkExporter:
             features:       22-value feature vector from extract_features(),
                              or None if it could not be computed this frame.
             feature_quality: Quality score from extract_features(), or None.
+            feature_confidence: 22-value confidence array from extract_features(),
+                             or None.
 
         Raises:
             ValueError: if active_issues contains a code not in
@@ -433,6 +436,8 @@ class LandmarkExporter:
             "features": [round(f, 4) for f in features] if features is not None else [],
             "feature_quality": round(feature_quality, 4) if feature_quality is not None else 0.0,
         }
+        if feature_confidence is not None:
+            frame_data["feature_confidence"] = [round(c, 4) for c in feature_confidence]
 
         for i, lm in enumerate(landmarks):
             frame_data["landmarks"][str(i)] = {
