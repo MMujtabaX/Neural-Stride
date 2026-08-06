@@ -70,7 +70,10 @@ ISSUE_NAMES = {
     "PIKE": "Pike",
     "HANDS_NARROW": "Hands too narrow",
     "HANDS_WIDE": "Hands too wide",
-    "ELBOW_FLARE": "Elbow flare"
+    "ELBOW_FLARE": "Elbow flare",
+    "KNEE_BENT": "Knee bent during leg raise",
+    "TOO_FAST": "Rep too fast",
+    "TOO_SLOW": "Rep too slow",
 }
 
 # Every issue code any detector may emit. ISSUE_NAMES covers the ones that appear in

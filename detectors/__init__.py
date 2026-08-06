@@ -12,10 +12,11 @@ CONTENTS:
     get_exercise()       — Returns an exercise instance by menu number
 
 REGISTERED EXERCISES:
-    1. Squat    — SquatExercise    (detectors/squat.py)
-    2. Push-Up  — PushUpExercise   (detectors/pushup.py)
-    3. Plank    — PlankExercise    (detectors/plank.py)
-    4. Lunge    — LungeExercise    (detectors/lunge.py)
+    1. Squat            — SquatExercise      (detectors/squat.py)
+    2. Push-Up          — PushUpExercise     (detectors/pushup.py)
+    3. Plank            — PlankExercise      (detectors/plank.py)
+    4. Lunge            — LungeExercise      (detectors/lunge.py)
+    5. Side Leg Raise   — LegRaiseExercise   (detectors/legraise.py)
 
 TO ADD A NEW EXERCISE:
     1. Create detectors/your_exercise.py extending BaseExercise
@@ -30,6 +31,7 @@ from detectors.squat import SquatExercise
 from detectors.pushup import PushUpExercise
 from detectors.plank import PlankExercise
 from detectors.lunge import LungeExercise
+from detectors.legraise import LegRaiseExercise
 
 # Exercise registry: menu_number -> (display_name, exercise_class)
 # Main.py reads this to build the selection menu and create instances
@@ -38,6 +40,7 @@ EXERCISES = {
     2: ("Push-Up", PushUpExercise),
     3: ("Plank", PlankExercise),
     4: ("Lunge", LungeExercise),
+    5: ("Side Leg Raise", LegRaiseExercise),
 }
 
 
