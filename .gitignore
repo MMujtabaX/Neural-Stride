@@ -3,6 +3,5 @@ venv-train/
 Landmarks/
 sessions/
 Uploaded Video Landmarks/
-dataset/
 __pycache__/
 *.pyc
