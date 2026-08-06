@@ -156,7 +156,7 @@ def main():
     mp_drawing = mp.solutions.drawing_utils
 
     feedback_display = FeedbackDisplay()
-    session = SessionTracker()
+    session = SessionTracker(exercise_name=exercise_name)
     landmark_exporter = LandmarkExporter(
         output_dir="Landmarks",
         exercise=exercise_name,

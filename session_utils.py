@@ -7,7 +7,9 @@ Tracks workout session data (reps, form issues, timing) and exports
 everything to a CSV file when the workout ends.
 
 CONTENTS:
-    ISSUE_NAMES         — Maps internal issue codes to human-readable names
+    ISSUE_NAMES         — Default (squat/push-up-oriented) issue code -> display name mapping
+    EXERCISE_ISSUE_NAMES — Per-exercise overrides for codes whose wording differs by exercise
+    issue_display_name  — Resolver: per-exercise override if one exists, else the ISSUE_NAMES default
     SessionTracker      — Main class that logs reps and saves CSV
 
 ISSUE CODES:
@@ -16,12 +18,19 @@ ISSUE CODES:
         SEVERE_LEAN  — Extreme back lean (worse threshold)
         KNEE_FORWARD — Front knee extending past toes (squat/lunge)
         HIP_DROP     — Hips uneven (left/right y-difference too large)
-        SHALLOW      — Squat/push-up not going deep enough
+        SHALLOW      — Not going deep/high enough (squat/push-up depth, or leg-raise height —
+                       see EXERCISE_ISSUE_NAMES for the leg-raise-specific wording)
         HIP_SAG      — Push-up: hips dropping below body line
         PIKE         — Push-up: hips too high above body line
         HANDS_NARROW — Push-up: grip too close together
         HANDS_WIDE   — Push-up: grip too far apart
         ELBOW_FLARE  — Push-up: elbows pointing too far outward
+        KNEE_BENT    — Leg raise: raised knee bending instead of staying straight
+
+    A single code can mean different things (in wording, not in meaning) across exercises —
+    e.g. SHALLOW is "Shallow squat" for squat but "Shallow raise" for leg raise. The code
+    itself, and what's written to VALID_ISSUE_CODES/JSONL active_issues, never changes;
+    only the human-readable string does, via EXERCISE_ISSUE_NAMES/issue_display_name below.
 
 SESSION FLOW:
     1. SessionTracker() created at workout start — records start_time
@@ -36,7 +45,10 @@ SESSION FLOW:
 CSV FORMAT:
     Saved to: sessions/session_DD-MM-YYYY_HH-MM-SSAM.csv
     Top section: one row per rep with columns:
-        rep, timestamp_seconds, timestamp_mm_ss, clean, form_issues, avg_knee_angle
+        rep, timestamp_seconds, timestamp_mm_ss, clean, form_issues, rep_angle
+        (rep_angle is the exercise's characteristic per-rep angle: knee angle for
+        squat/lunge, peak abduction angle for leg raise, etc. — generic header,
+        exercise-specific meaning, so it never needs its own per-exercise column name)
     Bottom section: session summary rows (key-value pairs):
         Date, Duration, Total Reps, Clean Reps, Form Issue Reps, Form Accuracy,
         Form Issues Breakdown, CSV File
@@ -56,10 +68,10 @@ import os
 from datetime import datetime
 
 
-# Maps internal form issue codes to human-readable display names
-# Used in CSV export and console output
-# All exercises share this single dictionary — exercise-specific issues
-# (SHALLOW, HIP_SAG, etc.) simply never appear in sessions of other exercises
+# Default issue code -> human-readable display name mapping.
+# Used in CSV export and console output. This is the fallback wording for any
+# exercise that doesn't have its own entry in EXERCISE_ISSUE_NAMES below — it is
+# NOT exercise-specific itself, just the default when no override applies.
 ISSUE_NAMES = {
     "BACK_LEAN": "Back lean",
     "SEVERE_LEAN": "Severe back lean",
@@ -75,6 +87,44 @@ ISSUE_NAMES = {
     "TOO_FAST": "Rep too fast",
     "TOO_SLOW": "Rep too slow",
 }
+
+# Per-exercise overrides for codes whose wording depends on which exercise emitted
+# them — same underlying code, different meaning in plain English (e.g. SHALLOW
+# means "not deep enough" for squat but "not high enough" for leg raise). Only
+# display text lives here; the issue CODE never changes, and codes not listed for
+# an exercise simply fall back to ISSUE_NAMES via issue_display_name() below.
+EXERCISE_ISSUE_NAMES = {
+    "Side Leg Raise": {
+        "SHALLOW": "Shallow raise",
+        "KNEE_BENT": "Knee bent during leg raise",
+    },
+}
+
+
+def issue_display_name(code, exercise_name=None):
+    """
+    Resolve an issue code to its human-readable display string.
+
+    Checks EXERCISE_ISSUE_NAMES for an exercise-specific override first, then
+    falls back to the shared ISSUE_NAMES default, then to the raw code itself
+    if neither has an entry. Every place that turns a code into display text
+    for the CSV or summary should go through this, not ISSUE_NAMES directly,
+    so a code's wording can differ by exercise without forking the vocabulary.
+
+    Args:
+        code:          Issue code string (e.g. "SHALLOW").
+        exercise_name: Exercise display name (e.g. "Side Leg Raise"), or None
+                       to use the shared default unconditionally.
+
+    Returns:
+        Human-readable display string.
+    """
+    if exercise_name and exercise_name in EXERCISE_ISSUE_NAMES:
+        override = EXERCISE_ISSUE_NAMES[exercise_name].get(code)
+        if override:
+            return override
+    return ISSUE_NAMES.get(code, code)
+
 
 # Every issue code any detector may emit. ISSUE_NAMES covers the ones that appear in
 # rep summaries; this set is the full vocabulary including frame-level-only codes.
@@ -92,15 +142,24 @@ class SessionTracker:
     exports everything to a CSV file when the session ends.
 
     Called from main.py:
-        session = SessionTracker()           # At workout start
+        session = SessionTracker(exercise_name=exercise_name)  # At workout start
         session.log_rep(...)                  # Each time a rep completes
         session.end_session()                # When 'q' is pressed
         summary = session.get_summary()       # Build summary dict
         path = session.save_to_csv()          # Write CSV file
     """
 
-    def __init__(self):
-        """Initialize a new session. Records the start time immediately."""
+    def __init__(self, exercise_name=None):
+        """
+        Initialize a new session. Records the start time immediately.
+
+        Args:
+            exercise_name: Exercise display name (e.g. "Side Leg Raise"), used to
+                           resolve issue codes to their per-exercise display text
+                           via issue_display_name(). None falls back to the
+                           shared ISSUE_NAMES default for every code.
+        """
+        self.exercise_name = exercise_name
         self.start_time = time.time()       # Workout start timestamp (epoch seconds)
         self.end_time = None                # Set when end_session() is called
         self.reps = []                      # List of rep data dicts (one per completed rep)
@@ -121,7 +180,9 @@ class SessionTracker:
             had_form_issues:  True if any form issues were detected during this rep
             issues:           List of issue code strings (e.g., ["BACK_LEAN", "KNEE_FORWARD"])
                               Empty list if rep was clean
-            avg_knee_angle:   Average knee/elbow angle during the rep (degrees)
+            avg_knee_angle:   The exercise's characteristic angle for the rep, in degrees
+                              (e.g. knee angle for squat, peak abduction angle for leg
+                              raise) — written to CSV under the generic "rep_angle" column
         """
         self.total_reps += 1
 
@@ -189,7 +250,7 @@ class SessionTracker:
         if self.form_issue_breakdown:
             parts = []
             for issue, count in self.form_issue_breakdown.items():
-                name = ISSUE_NAMES.get(issue, issue)  # Convert code to readable name
+                name = issue_display_name(issue, self.exercise_name)  # Convert code to readable name
                 parts.append(f"{name}: {count}")
             form_issues_str = ", ".join(parts)
         else:
@@ -247,14 +308,14 @@ class SessionTracker:
                 "timestamp_mm_ss",
                 "clean",
                 "form_issues",
-                "avg_knee_angle"
+                "rep_angle"
             ])
 
             # One row per completed rep
             for rep in self.reps:
                 # Convert issue codes to readable names, joined with "; "
                 issues_str = "; ".join(
-                    ISSUE_NAMES.get(i, i) for i in rep["issues"]
+                    issue_display_name(i, self.exercise_name) for i in rep["issues"]
                 ) if rep["issues"] else "None"
 
                 # Format timestamp as both raw seconds and MM:SS

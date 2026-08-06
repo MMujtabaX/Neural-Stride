@@ -23,19 +23,37 @@ REP LIFECYCLE:
     - COMPLETED: a rep is open and result.rep_completed is True -> closed with
                  completed=True, using the final labels straight off `result`
                  (rep_had_issues, rep_issues, rep_avg_angle).
-    - ABORTED:   a rep is open and result.state returns to idle_state without
-                 rep_completed firing (e.g. a halfway squat that comes back up
-                 without ever reaching the down-hold threshold) -> closed with
-                 completed=False, aborted=True, clean=None, issues=[].
-                 Aborted reps are KEPT, not discarded — partial/shallow
-                 attempts are valuable negative training examples.
+    - ABORTED:   a rep is open, state has been back at idle_state for more
+                 than ABORT_GRACE_FRAMES consecutive frames, and rep_completed
+                 still hasn't fired -> closed with completed=False,
+                 aborted=True, clean=None, issues=[]. Aborted reps are KEPT,
+                 not discarded — partial/shallow attempts are valuable
+                 negative training examples.
     - abort():   called by main.py when the person leaves the frame, check_ready
                  fails, or the session ends, so a rep window is never left
-                 spanning a gap where nothing was tracked.
+                 spanning a gap where nothing was tracked. This is an explicit,
+                 immediate close — it does not wait out the grace window.
+
+WHY THE GRACE WINDOW (ABORT_GRACE_FRAMES):
+    squat.py / lunge.py / pushup.py fire rep_completed on the exact same frame
+    their state flips back to idle_state, so update() sees rep_completed=True
+    before it ever checks state==idle_state — the grace window is never
+    consulted for them. legraise.py instead requires MIN_UP_FRAMES consecutive
+    idle frames after the state flip before it commits to rep_completed=True
+    (its debounce against flicker). Closing the window the instant state==
+    idle_state, before that decision lands, aborted every legraise rep with no
+    label and silently dropped the real rep_completed event a few frames
+    later (current_rep was already None by then). The grace window gives a
+    detector like that room to still finish deciding; if nothing arrives
+    within ABORT_GRACE_FRAMES idle frames, the window closes as aborted same
+    as before, just a few frames later than it used to for genuinely
+    abandoned attempts.
 
 update() returns None on any frame where no rep event occurred (the common
 case — most frames are mid-rep or idle with nothing to report).
 """
+
+ABORT_GRACE_FRAMES = 6
 
 
 class RepWindowTracker:
@@ -63,6 +81,7 @@ class RepWindowTracker:
         self.idle_state = idle_state
         self.current_rep = None  # dict with rep_id/start_frame/start_timestamp, or None
         self._next_rep_id = 1
+        self._idle_frame_count = 0  # consecutive idle frames seen while current_rep is open and not yet completed
 
     def update(self, frame_number, timestamp, result):
         """
@@ -82,9 +101,11 @@ class RepWindowTracker:
                     "start_timestamp": timestamp,
                 }
                 self._next_rep_id += 1
+                self._idle_frame_count = 0
             return None
 
         if result.rep_completed:
+            self._idle_frame_count = 0
             return self._close(
                 frame_number, timestamp,
                 completed=True, aborted=False,
@@ -94,12 +115,17 @@ class RepWindowTracker:
             )
 
         if result.state == self.idle_state:
-            return self._close(
-                frame_number, timestamp,
-                completed=False, aborted=True,
-                clean=None, issues=[], avg_angle=0,
-            )
+            self._idle_frame_count += 1
+            if self._idle_frame_count >= ABORT_GRACE_FRAMES:
+                self._idle_frame_count = 0
+                return self._close(
+                    frame_number, timestamp,
+                    completed=False, aborted=True,
+                    clean=None, issues=[], avg_angle=0,
+                )
+            return None
 
+        self._idle_frame_count = 0
         return None
 
     def abort(self, frame_number, timestamp):
@@ -113,6 +139,7 @@ class RepWindowTracker:
         """
         if self.current_rep is None:
             return None
+        self._idle_frame_count = 0
         return self._close(
             frame_number, timestamp,
             completed=False, aborted=True,
@@ -123,6 +150,7 @@ class RepWindowTracker:
         """Discard any open rep and restart rep numbering from 1."""
         self.current_rep = None
         self._next_rep_id = 1
+        self._idle_frame_count = 0
 
     def _close(self, frame_number, timestamp, completed, aborted, clean, issues, avg_angle):
         rep = self.current_rep
