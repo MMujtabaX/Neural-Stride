@@ -132,7 +132,41 @@ def prompt_session_metadata(exercise_name):
 def main():
     exercise, exercise_name, target_time = show_exercise_menu_and_select()
     subject_id, camera_view, form_intent = prompt_session_metadata(exercise_name)
+    run_live_session(exercise, exercise_name, target_time, subject_id, camera_view, form_intent)
 
+
+def run_live_session(exercise, exercise_name, target_time, subject_id, camera_view, form_intent,
+                      extensions=None):
+    """
+    Camera setup, the main per-frame loop, and end-of-session summary/export
+    -- everything main() used to do inline after the menu/prompt step.
+    Extracted so other entry scripts (e.g. main_with_model.py) can reuse this
+    exact code via import instead of copy-pasting it.
+
+    `extensions` is an optional hook object (any object exposing the methods
+    below; see main_with_model.py for a real implementation). When it's None
+    (what main() itself passes), none of the hook calls below fire and this
+    function's behavior is exactly what main()'s old inline body did --
+    Phase 1 is un-regressed by construction, not by convention.
+
+    Hook methods, all optional (checked as `extensions is not None` at each
+    call site, not duck-typed per-method -- an extensions object must
+    implement all four it will be called with):
+        on_frame(frame_number, landmarks):
+            Called once per frame where MediaPipe detected a person, right
+            after this frame's frame_number is known. For buffering raw
+            landmarks -- called regardless of ready/tracking state.
+        on_rep_event(rep_event):
+            Called with whatever RepWindowTracker produced this frame
+            (a completed/aborted rep dict, or None) -- every call site that
+            currently calls log_rep_event_if_any() triggers this too.
+        draw_overlay(frame):
+            Called right before cv2.imshow(), after the existing HUD is
+            drawn. Mutate `frame` in place to add extra overlay content.
+        on_session_end():
+            Called once, after the rule-engine console summary is printed
+            and before the CSV is saved.
+    """
     pose, mp_pose = create_pose_detector()
 
     voice = VoiceEngine()
@@ -186,6 +220,8 @@ def main():
         nonlocal completed_rep_events, aborted_rep_events
         if rep_event is None:
             return
+        if extensions is not None:
+            extensions.on_rep_event(rep_event)
         rep_event["exercise"] = exercise_name
         landmark_exporter.log_rep_event(rep_event)
         if rep_event["completed"]:
@@ -243,6 +279,9 @@ def main():
             frame_number = landmark_exporter.frame_count + 1
             frame_timestamp = now - session.start_time
             rep_event = None
+
+            if extensions is not None:
+                extensions.on_frame(frame_number, landmarks)
 
             try:
                 ready, not_ready_msg = exercise.check_ready(landmarks, mp_pose)
@@ -334,6 +373,9 @@ def main():
             exercise_name=exercise_name
         )
 
+        if extensions is not None:
+            extensions.draw_overlay(frame)
+
         cv2.imshow(window_name, frame)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -369,6 +411,9 @@ def main():
     print(f"Form Accuracy: {summary['clean_percentage']}%", flush=True)
     print(f"Form Issues: {summary['form_issues']}", flush=True)
     print("======================\n", flush=True)
+
+    if extensions is not None:
+        extensions.on_session_end()
 
     csv_path = session.save_to_csv(output_dir="sessions")
     print(f"Session saved to: {csv_path}", flush=True)
