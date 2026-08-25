@@ -12,3 +12,4 @@ numpy==2.4.6
 protobuf==4.25.3
 pywin32==311
 websockets==16.1
+tensorflow==2.18.1
